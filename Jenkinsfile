@@ -2,7 +2,7 @@ pipeline {
   agent any
   environment {
     AWS_REGION = 'us-east-1'
-    ECR_URI    = '<ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/userprofile'
+    ECR_URI    = '248928952946.dkr.ecr.us-east-1.amazonaws.com/userprofile'
   }
   options { timestamps() }
 
