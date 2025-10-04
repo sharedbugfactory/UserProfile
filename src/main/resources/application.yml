@@ -12,4 +12,17 @@ spring:
     properties:
       hibernate.format_sql: true
 server:
-  port: 8080
+  port: 80         # match your container’s port (you currently expose 80)
+  servlet:
+    context-path: /  # optional, but avoids surprises
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never   # or when_authorized
