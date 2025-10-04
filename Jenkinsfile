@@ -45,31 +45,48 @@ set -euo pipefail
       }
     }
 
-    stage('Bootstrap tools (aws+docker CLI, git, jq)') {
+    stage('Bootstrap tools (aws+docker CLI, jq)') {
       steps {
         sh '''#!/usr/bin/env bash
-set -euo pipefail
-mkdir -p "${BIN}"
+    set -euo pipefail
+    mkdir -p "${BIN}"
 
-# docker CLI (client only)
-if ! "${BIN}/docker" --version >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
-  VER="26.1.3"
-  curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${VER}.tgz" -o /tmp/docker.tgz
-  tar -xzf /tmp/docker.tgz -C /tmp
-  install -m0755 /tmp/docker/docker "${BIN}/docker"
-fi
+    # docker CLI (client only)
+    if ! "${BIN}/docker" --version >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+      VER="26.1.3"
+      curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${VER}.tgz" -o /tmp/docker.tgz
+      tar -xzf /tmp/docker.tgz -C /tmp
+      install -m0755 /tmp/docker/docker "${BIN}/docker"
+    fi
 
-# aws cli v2
-if ! "${BIN}/aws" --version >/dev/null 2>&1 && ! command -v aws >/dev/null 2>&1; then
-  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-  apt-get update -y || true; apt-get install -y unzip ca-certificates || true
-  unzip -q -o /tmp/awscliv2.zip -d /tmp
-  /tmp/aws/install -i /var/jenkins_home/.aws-cli -b "${BIN}"
-fi
+    # aws cli v2 (installs to user dir and links to BIN)
+    if ! "${BIN}/aws" --version >/dev/null 2>&1 && ! command -v aws >/dev/null 2>&1; then
+      curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+      (command -v unzip >/dev/null 2>&1 || true)  # don't fail if unzip missing; AWS installer can extract itself when present
+      unzip -q -o /tmp/awscliv2.zip -d /tmp || true
+      /tmp/aws/install -i /var/jenkins_home/.aws-cli -b "${BIN}"
+    fi
 
-# git & jq
-apt-get update -y || true
-apt-get install -y git jq || true
+    # jq (static) — no apt needed
+    if ! "${BIN}/jq" --version >/dev/null 2>&1 && ! command -v jq >/dev/null 2>&1; then
+      # Try GitHub release URL first; if it fails, fallback mirror
+      if curl -fL "https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64" -o "${BIN}/jq"; then
+        :
+      else
+        curl -fsSL "https://stedolan.github.io/jq/download/linux64/jq" -o "${BIN}/jq"
+      fi
+      chmod +x "${BIN}/jq"
+    fi
+
+    export PATH="${BIN}:$PATH"
+
+    # show versions
+    aws --version || true
+    docker --version || true
+    "${BIN}/jq" --version || jq --version || true
+    '''
+      }
+    }
 
 export PATH="${BIN}:$PATH"
 aws --version; docker --version; git --version; jq --version
