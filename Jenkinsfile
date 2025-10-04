@@ -88,12 +88,6 @@ set -euo pipefail
       }
     }
 
-export PATH="${BIN}:$PATH"
-aws --version; docker --version; git --version; jq --version
-'''
-      }
-    }
-
     stage('Docker build & push to ECR') {
       steps {
         sh '''#!/usr/bin/env bash
