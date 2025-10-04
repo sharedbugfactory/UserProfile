@@ -1,8 +1,8 @@
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/userdb
-    username: userdb
-    password: userdb
+    url: jdbc:postgresql://localhost:5432/users
+    username: user
+    password: pass
   data:
     mongodb:
       uri: mongodb://mongo:27017/userdb
