@@ -20,7 +20,7 @@ pipeline {
       steps {
         retry(2) {
           sh '''
-            bash -lc <<'BASH'
+            bash -lc <<"BASH"
             set -euo pipefail
             export GRADLE_USER_HOME="${WORKSPACE}/.gradle"
             chmod +x ./gradlew || true
@@ -41,7 +41,7 @@ pipeline {
     stage('Assemble Jar') {
       steps {
         sh '''
-          bash -lc <<'BASH'
+          bash -lc <<"BASH"
           set -euo pipefail
           ./gradlew bootJar --no-daemon
           BASH
@@ -52,12 +52,12 @@ pipeline {
     stage('Bootstrap tools (aws+docker CLI, git, jq)') {
       steps {
         sh '''
-          bash -lc <<'BASH'
+          bash -lc <<"BASH"
           set -euo pipefail
           mkdir -p "${BIN}"
 
           # docker CLI (client only)
-          if ! "${BIN}/docker" --version >/dev/null 2>&1 && ! command -v docker >/devnull 2>&1; then
+          if ! "${BIN}/docker" --version >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
             VER="26.1.3"
             curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${VER}.tgz" -o /tmp/docker.tgz
             tar -xzf /tmp/docker.tgz -C /tmp
@@ -72,7 +72,7 @@ pipeline {
             /tmp/aws/install -i /var/jenkins_home/.aws-cli -b "${BIN}"
           fi
 
-          # git & jq (for checkout and task-def JSON edit)
+          # git & jq
           apt-get update -y || true
           apt-get install -y git jq || true
 
@@ -86,22 +86,17 @@ pipeline {
     stage('Docker build & push to ECR') {
       steps {
         sh '''
-          bash -lc <<'BASH'
+          bash -lc <<"BASH"
           set -euo pipefail
           export PATH="${BIN}:$PATH"
 
-          # ensure repo exists
           aws ecr describe-repositories --repository-names "${ECR_REPO}" --region "${AWS_REGION}" \
             || aws ecr create-repository --repository-name "${ECR_REPO}" --region "${AWS_REGION}"
 
-          # login to ECR
           aws ecr get-login-password --region "${AWS_REGION}" \
             | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-          # build for x86_64 (EC2 hosts)
           docker build --platform=linux/amd64 -t "${ECR_REPO}:${IMAGE_TAG}" .
-
-          # tag & push
           docker tag "${ECR_REPO}:${IMAGE_TAG}" "${ECR_URI}:${IMAGE_TAG}"
           docker tag "${ECR_REPO}:${IMAGE_TAG}" "${ECR_URI}:latest"
           docker push "${ECR_URI}:${IMAGE_TAG}"
@@ -114,7 +109,7 @@ pipeline {
     stage('Deploy to ECS (register new task-def revision)') {
       steps {
         sh '''
-          bash -lc <<'BASH'
+          bash -lc <<"BASH"
           set -euo pipefail
           export PATH="${BIN}:$PATH"
 
@@ -147,7 +142,7 @@ pipeline {
     stage('Smoke test (auto-discover host)') {
       steps {
         sh '''
-          bash -lc <<'BASH'
+          bash -lc <<"BASH"
           set -euo pipefail
           export PATH="${BIN}:$PATH"
 
