@@ -117,7 +117,20 @@ export PATH="${BIN}:$PATH"
 
 FAMILY="userprofile-task"
 CLUSTER="userprofile-cluster"
-SERVICE="userprofile-service"
+
+# Dynamically detect the service name that matches the task family
+SERVICE=$(aws ecs list-services \
+  --cluster "$CLUSTER" \
+  --region "$AWS_REGION" \
+  --query "serviceArns[?contains(@, \`${FAMILY}-service\`)] | [0]" \
+  --output text)
+
+if [ -z "$SERVICE" ] || [ "$SERVICE" = "None" ]; then
+  echo "❌ No ECS service found matching $FAMILY in cluster $CLUSTER"
+  exit 1
+fi
+
+echo "✅ Using service: $SERVICE"
 
 TD=$(aws ecs describe-task-definition \
      --task-definition "$FAMILY" --region "$AWS_REGION" \
