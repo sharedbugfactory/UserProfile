@@ -9,6 +9,9 @@ pipeline {
     IMAGE_TAG  = "${env.GIT_COMMIT?.take(7) ?: env.BUILD_NUMBER}"
     ECR_URI    = "${ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
     BIN        = '/var/jenkins_home/bin'   // persists via EFS
+    FAMILY     = 'userprofile-task'        // <-- your task definition family
+    CLUSTER    = 'userprofile-cluster'     // <-- your ECS cluster name
+    SERVICE    = 'userprofile-task-service-ib0yt9ll' // <-- put your actual ECS service name here
   }
 
   stages {
@@ -48,43 +51,37 @@ set -euo pipefail
     stage('Bootstrap tools (aws+docker CLI, jq)') {
       steps {
         sh '''#!/usr/bin/env bash
-    set -euo pipefail
-    mkdir -p "${BIN}"
+set -euo pipefail
+mkdir -p "${BIN}"
 
-    # docker CLI (client only)
-    if ! "${BIN}/docker" --version >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
-      VER="26.1.3"
-      curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${VER}.tgz" -o /tmp/docker.tgz
-      tar -xzf /tmp/docker.tgz -C /tmp
-      install -m0755 /tmp/docker/docker "${BIN}/docker"
-    fi
+# docker CLI (client only)
+if ! "${BIN}/docker" --version >/dev/null 2>&1 && ! command -v docker >/dev/null 2>&1; then
+  VER="26.1.3"
+  curl -fsSL "https://download.docker.com/linux/static/stable/x86_64/docker-${VER}.tgz" -o /tmp/docker.tgz
+  tar -xzf /tmp/docker.tgz -C /tmp
+  install -m0755 /tmp/docker/docker "${BIN}/docker"
+fi
 
-    # aws cli v2 (installs to user dir and links to BIN)
-    if ! "${BIN}/aws" --version >/dev/null 2>&1 && ! command -v aws >/dev/null 2>&1; then
-      curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
-      (command -v unzip >/dev/null 2>&1 || true)  # don't fail if unzip missing; AWS installer can extract itself when present
-      unzip -q -o /tmp/awscliv2.zip -d /tmp || true
-      /tmp/aws/install -i /var/jenkins_home/.aws-cli -b "${BIN}"
-    fi
+# aws cli v2
+if ! "${BIN}/aws" --version >/dev/null 2>&1 && ! command -v aws >/dev/null 2>&1; then
+  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscliv2.zip
+  (command -v unzip >/dev/null 2>&1 || true)
+  unzip -q -o /tmp/awscliv2.zip -d /tmp || true
+  /tmp/aws/install -i /var/jenkins_home/.aws-cli -b "${BIN}"
+fi
 
-    # jq (static) — no apt needed
-    if ! "${BIN}/jq" --version >/dev/null 2>&1 && ! command -v jq >/dev/null 2>&1; then
-      # Try GitHub release URL first; if it fails, fallback mirror
-      if curl -fL "https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64" -o "${BIN}/jq"; then
-        :
-      else
-        curl -fsSL "https://stedolan.github.io/jq/download/linux64/jq" -o "${BIN}/jq"
-      fi
-      chmod +x "${BIN}/jq"
-    fi
+# jq (static)
+if ! "${BIN}/jq" --version >/dev/null 2>&1 && ! command -v jq >/dev/null 2>&1; then
+  curl -fL "https://github.com/stedolan/jq/releases/download/jq-1.6/jq-linux64" -o "${BIN}/jq" || \
+  curl -fsSL "https://stedolan.github.io/jq/download/linux64/jq" -o "${BIN}/jq"
+  chmod +x "${BIN}/jq"
+fi
 
-    export PATH="${BIN}:$PATH"
-
-    # show versions
-    aws --version || true
-    docker --version || true
-    "${BIN}/jq" --version || jq --version || true
-    '''
+export PATH="${BIN}:$PATH"
+aws --version || true
+docker --version || true
+"${BIN}/jq" --version || jq --version || true
+'''
       }
     }
 
@@ -115,27 +112,12 @@ docker push "${ECR_URI}:latest"
 set -euo pipefail
 export PATH="${BIN}:$PATH"
 
-FAMILY="userprofile-task"
-CLUSTER="userprofile-cluster"
-
-# Dynamically detect the service name that matches the task family
-SERVICE=$(aws ecs list-services \
-  --cluster "$CLUSTER" \
-  --region "$AWS_REGION" \
-  --query "serviceArns[?contains(@, \`${FAMILY}-service\`)] | [0]" \
-  --output text)
-
-if [ -z "$SERVICE" ] || [ "$SERVICE" = "None" ]; then
-  echo "❌ No ECS service found matching $FAMILY in cluster $CLUSTER"
-  exit 1
-fi
-
-echo "✅ Using service: $SERVICE"
-
+# 1) Get current task def JSON
 TD=$(aws ecs describe-task-definition \
      --task-definition "$FAMILY" --region "$AWS_REGION" \
      --query 'taskDefinition' --output json)
 
+# 2) Swap image in container "user-app"
 NEW=$(echo "$TD" | jq --arg IMG "${ECR_URI}:${IMAGE_TAG}" '
   del(.taskDefinitionArn, .revision, .status, .requiresAttributes, .compatibilities, .registeredAt, .registeredBy)
   | (.containerDefinitions[] | select(.name=="user-app")).image = $IMG
@@ -143,10 +125,12 @@ NEW=$(echo "$TD" | jq --arg IMG "${ECR_URI}:${IMAGE_TAG}" '
 
 echo "$NEW" > /tmp/td.json
 
+# 3) Register new revision
 REV_ARN=$(aws ecs register-task-definition \
           --cli-input-json file:///tmp/td.json --region "$AWS_REGION" \
           --query 'taskDefinition.taskDefinitionArn' --output text)
 
+# 4) Update service to that new revision
 aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
   --task-definition "$REV_ARN" --region "$AWS_REGION"
 '''
@@ -159,8 +143,6 @@ aws ecs update-service --cluster "$CLUSTER" --service "$SERVICE" \
 set -euo pipefail
 export PATH="${BIN}:$PATH"
 
-CLUSTER="userprofile-cluster"
-SERVICE="userprofile-service"
 PATH_SUFFIX="/actuator/health"
 
 TASK_ARN=$(aws ecs list-tasks \
@@ -173,7 +155,8 @@ TASK_ARN=$(aws ecs list-tasks \
 DESC=$(aws ecs describe-tasks --cluster "$CLUSTER" --tasks "$TASK_ARN" --region "$AWS_REGION")
 CI_ARN=$(echo "$DESC" | jq -r '.tasks[0].containerInstanceArn')
 
-HOST_PORT=$(echo "$DESC" | jq -r '[.tasks[0].containers[0].networkBindings[]?.hostPort] | first // 8080')
+# host network: defaults to 80; bridge: read first mapped hostPort
+HOST_PORT=$(echo "$DESC" | jq -r '[.tasks[0].containers[0].networkBindings[]?.hostPort] | first // 80')
 
 EC2_ID=$(aws ecs describe-container-instances \
   --cluster "$CLUSTER" --container-instances "$CI_ARN" \
